@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import binanceusdm from '../../binanceusdm.js';
+import binance from '../../binance.js';
 
 const market = {
     id: 'BTCUSDT', symbol: 'BTC/USDT:USDT', base: 'BTC', quote: 'USDT', settle: 'USDT',
@@ -17,6 +18,18 @@ function exchange (): any {
     result.setMarkets ([market]);
     return result;
 }
+
+test ('spot preserves source fields and uses the spot page limit and endpoint', async () => {
+    const ex: any = new binance ();
+    const spot = { ...market, symbol: 'BTC/USDT', type: 'spot', spot: true, swap: false, linear: false, contract: false };
+    ex.setMarkets ([spot]);
+    ex.publicGetKlines = async () => [row];
+    const values = await ex.fetchCandlescopeKlines (spot.symbol, '1M', undefined, 1000);
+    assert.equal (values[0].schema, 'candlescope.binance.spot.kline.v1');
+    assert.equal (values[0].volume, '10');
+    assert.equal (ex.parseCandlescopeWsKline (frame).marketType, 'spot');
+    await assert.rejects (ex.fetchCandlescopeKlines (spot.symbol, '1M', undefined, 1001), /1 to 1000/);
+});
 
 test ('standard six-value projection remains unchanged; extended values retain source precision and calendar close', () => {
     const ex = exchange ();

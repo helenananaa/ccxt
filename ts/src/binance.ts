@@ -4707,24 +4707,25 @@ export default class binance extends Exchange {
 
     /**
      * @ignore
-     * @description parses a USD-M trade candle without discarding source fields or decimal strings
+     * @description parses a spot or USD-M trade candle without discarding source fields or decimal strings
      * @param {object} ohlcv native Binance REST row with at least eleven fields
      * @param {object} market resolved linear swap market
      * @param {string} timeframe native timeframe
      * @returns {object} versioned candle with independent raw evidence, source close time and base/quote units
      */
     parseCandlescopeKline (ohlcv, market: Market = undefined, timeframe: Str = undefined): Dict {
-        if (!this.safeBool (market, 'swap') || !this.safeBool (market, 'linear')) {
-            throw new NotSupported (this.id + ' CandleScope klines support linear swaps only');
+        const spot = this.safeBool (market, 'spot');
+        if (!spot && (!this.safeBool (market, 'swap') || !this.safeBool (market, 'linear'))) {
+            throw new NotSupported (this.id + ' CandleScope klines support spot and linear swaps only');
         }
         const ohlcvLength = ohlcv.length;
         if (ohlcvLength < 11) {
             throw new BadResponse (this.id + ' CandleScope klines require at least 11 fields');
         }
         return {
-            'schema': 'candlescope.binance.usdm.kline.v1',
+            'schema': (spot) ? 'candlescope.binance.spot.kline.v1' : 'candlescope.binance.usdm.kline.v1',
             'exchange': 'binance',
-            'marketType': 'swap.linear',
+            'marketType': (spot) ? 'spot' : 'swap.linear',
             'marketId': market['id'],
             'symbol': market['symbol'],
             'timeframe': timeframe,
@@ -4749,12 +4750,13 @@ export default class binance extends Exchange {
 
     /**
      * @ignore
-     * @description fetches one page of complete USD-M trade candles, leaving standard fetchOHLCV unchanged
+     * @description fetches one page of complete spot or USD-M trade candles, leaving standard fetchOHLCV unchanged
+     * @see https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#klinecandlestick-data
      * @see https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Kline-Candlestick-Data
-     * @param {string} symbol unified linear swap symbol
+     * @param {string} symbol unified spot or linear swap symbol
      * @param {string} [timeframe] native candle interval
      * @param {int} [since] inclusive earliest open timestamp in milliseconds
-     * @param {int} [limit] page size from 1 to 1500, defaults to 500
+     * @param {int} [limit] page size from 1 to 1000 for spot or 1500 for swaps, defaults to 500
      * @param {object} [params] only until is supported; pagination belongs to the caller
      * @param {int} [params.until] inclusive latest open timestamp in milliseconds
      * @returns {object[]} versioned complete candles with raw source evidence
@@ -4762,8 +4764,9 @@ export default class binance extends Exchange {
     async fetchCandlescopeKlines (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params = {}): Promise<Dict[]> {
         await this.loadMarkets ();
         const market = this.market (symbol);
-        if (!this.safeBool (market, 'swap') || !this.safeBool (market, 'linear')) {
-            throw new NotSupported (this.id + ' CandleScope klines support linear swaps only');
+        const spot = this.safeBool (market, 'spot');
+        if (!spot && (!this.safeBool (market, 'swap') || !this.safeBool (market, 'linear'))) {
+            throw new NotSupported (this.id + ' CandleScope klines support spot and linear swaps only');
         }
         const until = this.safeInteger (params, 'until');
         const remaining = this.omit (params, 'until');
@@ -4772,7 +4775,11 @@ export default class binance extends Exchange {
             throw new BadRequest (this.id + ' fetchCandlescopeKlines only supports params.until');
         }
         limit = (limit === undefined) ? 500 : limit;
-        if ((limit < 1) || (limit > 1500)) {
+        const maxLimit = (spot) ? 1000 : 1500;
+        if ((limit < 1) || (limit > maxLimit)) {
+            if (spot) {
+                throw new BadRequest (this.id + ' fetchCandlescopeKlines spot limit must be 1 to 1000');
+            }
             throw new BadRequest (this.id + ' fetchCandlescopeKlines limit must be 1 to 1500');
         }
         if ((since !== undefined) && (until !== undefined) && (since > until)) {
@@ -4789,7 +4796,12 @@ export default class binance extends Exchange {
         if (until !== undefined) {
             request['endTime'] = until;
         }
-        const response = await this.fapiPublicGetKlines (request);
+        let response = undefined;
+        if (spot) {
+            response = await this.publicGetKlines (request);
+        } else {
+            response = await this.fapiPublicGetKlines (request);
+        }
         const result = [];
         for (let i = 0; i < response.length; i++) {
             const candle = this.parseCandlescopeKline (response[i], market, timeframe);
@@ -4810,7 +4822,7 @@ export default class binance extends Exchange {
 
     /**
      * @ignore
-     * @description parses a native USD-M kline frame before Pro reduces it to six values; performs no subscription or caching
+     * @description parses a native spot or USD-M kline frame before Pro reduces it to six values; performs no subscription or caching
      * @see https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Kline-Candlestick-Streams
      * @param {object} message native kline frame, after markets have been loaded
      * @returns {object} versioned candle with explicit x finality and independently copied raw frame
