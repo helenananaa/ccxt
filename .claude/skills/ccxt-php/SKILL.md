@@ -936,3 +936,8 @@ print_r($exchange->last_json_response);
 - [CCXT Pro Documentation](https://docs.ccxt.com/en/latest/ccxt.pro.html)
 - [Supported Exchanges](https://github.com/ccxt/ccxt#supported-cryptocurrency-exchange-markets)
 - [GitHub Repository](https://github.com/ccxt/ccxt)
+
+
+## CandleScope fork extension
+
+On the CandleScope fixed `4.5.60` fork branch, consult `wiki/CandleScope-Fork.md` before using the experimental complete Binance USD-M kline methods. These methods are not available in ordinary PyPI/npm CCXT. Python requires generating and building the pinned source; a direct Git Python install does not include the generated extension. Runtime qualification currently targets JS/Python; other language runtimes remain unqualified.

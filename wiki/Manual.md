@@ -8941,3 +8941,8 @@ In case you experience any difficulty connecting to a particular exchange, do th
 - If you are getting authentication errors or *'invalid keys'* errors, those are most likely due to a nonce issue.
 - Some exchanges do not state it clearly if they fail to authenticate your request. In those circumstances they might respond with an exotic error code, like HTTP 502 Bad Gateway Error or something that's even less related to the actual cause of the error.
 
+
+
+## CandleScope fixed-version fork prototype
+
+This fork adds an experimental complete Binance USD-M kline contract. See [CandleScope-Fork.md](CandleScope-Fork.md) for API, source pinning, build steps and qualification boundaries. Standard unified methods are unchanged.
