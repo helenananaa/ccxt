@@ -2571,6 +2571,149 @@ export default class okx extends Exchange {
         return this.parseTrades (data, market, since, limit);
     }
 
+    /**
+     * @ignore
+     * @description identifies the complete CandleScope candle contract
+     * @returns {object} pinned upstream version and source schema
+     */
+    candlescopeKlineContract (): Dict {
+        return { 'upstream': '4.5.60', 'schema': 'candlescope.okx.kline.v1' };
+    }
+
+    /**
+     * @ignore
+     * @description preserves native candle precision, volume units and confirm without inventing unavailable fields
+     * @see https://www.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks
+     * @param {object} ohlcv complete native nine-field candle
+     * @param {object} market resolved spot or linear swap market
+     * @param {string} timeframe native UTC interval
+     * @returns {object} source candle; trades and taker volumes are unavailable
+     */
+    parseCandlescopeKline (ohlcv, market: Market = undefined, timeframe: Str = undefined): Dict {
+        const spot = this.safeBool (market, 'spot');
+        if (!spot && (!this.safeBool (market, 'swap') || !this.safeBool (market, 'linear'))) {
+            throw new NotSupported (this.id + ' CandleScope klines support spot and linear swaps only');
+        }
+        const length = ohlcv.length;
+        const confirm = this.safeString (ohlcv, 8);
+        if ((length < 9) || ((confirm !== '0') && (confirm !== '1'))) {
+            throw new BadRequest (this.id + ' CandleScope candle requires nine fields and confirm');
+        }
+        const volumeIndex = (spot) ? 5 : 6;
+        return {
+            'schema': 'candlescope.okx.kline.v1',
+            'exchange': 'okx',
+            'marketType': (spot) ? 'spot' : 'swap.linear',
+            'marketId': market['id'],
+            'symbol': market['symbol'],
+            'timeframe': timeframe,
+            'timestamp': this.safeInteger (ohlcv, 0),
+            'open': this.safeString (ohlcv, 1),
+            'high': this.safeString (ohlcv, 2),
+            'low': this.safeString (ohlcv, 3),
+            'close': this.safeString (ohlcv, 4),
+            'volume': this.safeString (ohlcv, volumeIndex),
+            'volumeUnit': 'base',
+            'quoteVolume': this.safeString (ohlcv, 7),
+            'quoteVolumeUnit': 'quote',
+            'sourceVolume': this.safeString (ohlcv, 5),
+            'sourceVolumeUnit': (spot) ? 'base' : 'contracts',
+            'volumeCcy': this.safeString (ohlcv, 6),
+            'volumeCcyUnit': (spot) ? 'quote' : 'base',
+            'closed': (confirm === '1'),
+            'closeEvidence': 'okx_confirm',
+            'closeTime': undefined,
+            'eventTime': undefined,
+            'trades': undefined,
+            'takerBuyBaseVolume': undefined,
+            'takerBuyQuoteVolume': undefined,
+            'raw': this.json (ohlcv),
+        };
+    }
+
+    /**
+     * @ignore
+     * @description fetches complete native candles without the standard six-value projection
+     * @see https://www.okx.com/docs-v5/en/#rest-api-market-data-get-candlesticks-history
+     * @param {string} symbol unified spot or linear swap symbol
+     * @param {string} [timeframe] UTC candle interval
+     * @param {int} [since] inclusive earliest open timestamp
+     * @param {int} [limit] page size from 1 to 300
+     * @param {object} [params] range controls; pagination belongs to the caller
+     * @param {int} [params.until] inclusive latest open timestamp
+     * @returns {object[]} complete candles sorted by open timestamp
+     */
+    async fetchCandlescopeKlines (symbol: string, timeframe = '1m', since: Int = undefined, limit: Int = undefined, params = {}): Promise<Dict[]> {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        const until = this.safeInteger (params, 'until');
+        const remaining = this.omit (params, 'until');
+        const keys = Object.keys (remaining);
+        if (keys.length > 0) {
+            throw new BadRequest (this.id + ' fetchCandlescopeKlines only supports params.until');
+        }
+        limit = (limit === undefined) ? 100 : limit;
+        if ((limit < 1) || (limit > 300) || ((since !== undefined) && (until !== undefined) && (since > until))) {
+            throw new BadRequest (this.id + ' invalid CandleScope page range or limit');
+        }
+        let bar = this.safeString (this.timeframes, timeframe);
+        if (bar === undefined) {
+            throw new BadRequest (this.id + ' unsupported CandleScope timeframe');
+        }
+        if (this.parseTimeframe (timeframe) >= 21600) {
+            bar += 'utc';
+        }
+        const request: Dict = { 'instId': market['id'], 'bar': bar, 'limit': limit };
+        if (since !== undefined) {
+            request['before'] = Math.max (0, since - 1);
+        }
+        if (until !== undefined) {
+            request['after'] = until + 1;
+        }
+        const response = await this.publicGetMarketHistoryCandles (request);
+        if (this.safeString (response, 'code') !== '0') {
+            throw new ExchangeError (this.id + ' CandleScope history response failed');
+        }
+        const rows = this.safeList (response, 'data', []);
+        const result = [];
+        for (let i = 0; i < rows.length; i++) {
+            const candle = this.parseCandlescopeKline (rows[i], market, timeframe);
+            const timestamp = this.safeInteger (candle, 'timestamp');
+            if ((timestamp === undefined) || ((since !== undefined) && (timestamp < since)) || ((until !== undefined) && (timestamp > until))) {
+                continue;
+            }
+            result.push (candle);
+        }
+        return this.sortBy (result, 'timestamp');
+    }
+
+    /**
+     * @ignore
+     * @description parses every candle in a native frame, preserving the complete frame and row position
+     * @param {object} message native candle channel frame after markets are loaded
+     * @returns {object[]} source candles with explicit confirm finality and no invented event sequence
+     */
+    parseCandlescopeWsKlines (message): Dict[] {
+        const arg = this.safeDict (message, 'arg', {});
+        const channel = this.safeString (arg, 'channel', '');
+        if (channel.indexOf ('candle') !== 0) {
+            throw new BadRequest (this.id + ' CandleScope expected a candle channel');
+        }
+        let bar = channel.slice (6);
+        bar = bar.replace ('utc', '');
+        const timeframe = this.findTimeframe (bar);
+        const market = this.market (this.safeString (arg, 'instId'));
+        const rows = this.safeList (message, 'data', []);
+        const result = [];
+        for (let i = 0; i < rows.length; i++) {
+            const candle = this.parseCandlescopeKline (rows[i], market, timeframe);
+            candle['raw'] = this.json (message);
+            candle['rawRow'] = i;
+            result.push (candle);
+        }
+        return result;
+    }
+
     parseOHLCV (ohlcv, market: Market = undefined): OHLCV {
         //
         //     [
